@@ -94,12 +94,12 @@ std::string kDBPath = "/storage/hyperleveldb_simple_example";
 RETRY_STATS_VARS_GLOBAL;
 
 size_t kNumThreads = 4;
-size_t kTestSeconds = 10;
+size_t kTestMilliseconds = 5000;
 size_t kInitial = 1024;
 size_t kRange = 2048;
 size_t kUpdatePercent = 0;
 size_t kBigValueSize = 256;
-size_t kPostInitWait = 90;
+size_t kPostInitWait = 1;
 
 size_t print_vals_num = 100;
 size_t pf_vals_num = 1023;
@@ -229,7 +229,7 @@ void* IgorMTThreadBody(void* arg) {
 MEM_BARRIER;
 #ifndef NO_INIT_FILL
 // #ifdef INIT_SEQ
-  size_t j;
+  uint64_t j;
   if (id == 0) {
 
     for (j = kRange - 1; j > kRange/2; j--) {
@@ -324,7 +324,7 @@ MEM_BARRIER;
     } else {                 
       START_TS(0);              
       s = db->Get(ro, key_slice, &result);      
-      if(!s.IsNotFound()) {               
+      if(s.ok()) {               
         END_TS(0, my_getting_count_succ);       
         ADD_DUR(my_getting_succ);         
         my_getting_count_succ++;          
@@ -390,8 +390,8 @@ void IgorMultiThreaded() {
 
   struct timeval start, end;
   struct timespec timeout;
-  timeout.tv_sec = kTestSeconds / 1000;
-  timeout.tv_nsec = (kTestSeconds % 1000) * 1000000;
+  timeout.tv_sec = kTestMilliseconds / 1000;
+  timeout.tv_nsec = (kTestMilliseconds % 1000) * 1000000;
 
   stop = 0;
 
@@ -444,7 +444,7 @@ void IgorMultiThreaded() {
 
   stop = 1;
   gettimeofday(&end, NULL);
-  kTestSeconds = (end.tv_sec * 1000 + end.tv_usec / 1000) - (start.tv_sec * 1000 + start.tv_usec / 1000);
+  kTestMilliseconds = (end.tv_sec * 1000 + end.tv_usec / 1000) - (start.tv_sec * 1000 + start.tv_usec / 1000);
 
   for(t = 0; t < kNumThreads; t++) {
     rc = pthread_join(threads[t], &status);
@@ -518,7 +518,7 @@ void IgorMultiThreaded() {
   printf("rems: %-10llu | %-10llu | %10.1f%% | %10.1f%% | %10.1f%%\n", (LLU) removing_count_total,
    (LLU) removing_count_total_succ, removing_perc_succ, removing_perc, (removing_perc * removing_perc_succ) / 100);
 
-  double throughput = (putting_count_total + getting_count_total + removing_count_total) * 1000.0 / kTestSeconds;
+  double throughput = (putting_count_total + getting_count_total + removing_count_total) * 1000.0 / kTestMilliseconds;
   printf("#txs %zu\t(%-10.0f\n", kNumThreads, throughput);
   printf("#Mops %.3f\n", throughput / 1e6);
   // PRINT_STATS
@@ -531,6 +531,68 @@ void IgorMultiThreaded() {
   delete db;
 
   // pthread_exit(NULL);
+}
+
+void SeqWriteGet() {
+
+  // uint64_t i1, i2;
+  // Slice s1, s2;
+  // char* buf1 = new char[8];
+  // char* buf2 = new char[8];
+
+  // for (i1 = 0; i1 < 16; i1 ++) {
+  //   for (i2 = 16; i2 < 32; i2++) {
+  //     IntToSlice(s1, buf1, i1);
+  //     IntToSlice(s2, buf2, i2);
+  //     if (s1 == s2 || s1.compare(s2) == 0) {
+  //       printf("Equal: %lu = %lu\n", i1, i2);
+  //     }
+  //   }
+  // }
+
+  DB* db;
+  Options options;
+  // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
+  // create the DB if it's not already present
+  options.create_if_missing = true;
+
+  // open DB
+  Status s = DB::Open(options, kDBPath, &db);
+  assert(s.ok());
+  size_t j;
+  Slice key_slice;
+  char* buf = new char[8];
+  std::string result;
+
+  for (j = kRange - 1; j > kRange/2; j--) {
+    if (j == 7*kRange/8) {
+      printf("inserting: 25/100 done, j = %zu \n", j);
+    } else if (j == 3 * kRange / 4) {
+      printf("inserting: 50/100 done\n");
+    } else if (j == 5 * kRange / 8) {
+      printf("inserting: 75/100 done\n");
+    }
+    // memcpy(buf, &j, sizeof(j));
+    // key_slice.assign(buf, sizeof(j));
+    IntToSlice(key_slice, buf, j);
+    db->Put(WriteOptions(), key_slice, *BigSlice(kBigValueSize));
+
+    // IntToSlice(key_slice, buf, kRange - j);
+    // db->Put(wo, key_slice, *BigSlice(kBigValueSize));
+  }
+
+  for (j = 0; j < kRange; j++) {
+
+    // memcpy(buf, &j, sizeof(j));
+    // key_slice.assign(buf, sizeof(j));
+    IntToSlice(key_slice, buf, j);
+    Status s = db->Get(ReadOptions(), key_slice, &result);
+    if (s.ok()) {
+      printf("Found: %zu\n", j);
+    }
+    // IntToSlice(key_slice, buf, kRange - j);
+    // db->Put(wo, key_slice, *BigSlice(kBigValueSize));
+  }
 }
 
 int main(int argc, char** argv) {
@@ -598,7 +660,7 @@ int main(int argc, char** argv) {
          , argv[0]);
         exit(0);
       case 'd':
-        kTestSeconds = atoi(optarg);
+        kTestMilliseconds = atoi(optarg);
         break;
       case 'i':
         kInitial = atol(optarg);
@@ -651,6 +713,7 @@ int main(int argc, char** argv) {
   ssalloc_init();
   seeds = seed_rand();
   rand_max = kRange - 1;
+  
 
 
   // // ASSERT_OK(PutNoWAL("Igor", ""));
@@ -660,37 +723,12 @@ int main(int argc, char** argv) {
   ssmem_alloc_init_fs_size(alloc, SSMEM_DEFAULT_MEM_SIZE, SSMEM_GC_FREE_SET_SIZE, 0);
 #endif
 
-#if defined(TIGHT_ALLOC)
-  int level;
-  size_t total_bytes = 0;
-  size_t ns;
-  for (level = 1; level <= levelmax; ++level) {
-    // TODO remove magic number below
-    // 32 = sizeof (key + val + 2*uint32 + sl_node_t*)
-    ns = 32 + level * sizeof(void *);
-    // if (ns % 32 != 0) {
-    //   ns = 32 * (ns/32 + 1);
-    // }
-    // switch (log_base) {
-    //   case 2:
-        printf("nodes at level %d : %zu\n", level, (kInitial >> level));
-        total_bytes += ns * (kInitial >> level);
-        // break;
-    //   case 4:
-    //     printf("nodes at level %d : %d\n", level, 3 * (initial >> (2 * level)));
-    //     total_bytes += ns * 3 * (initial >> (2 * level));
-    //     break;
-    //   case 8:
-    //     printf("nodes at level %d : %d\n", level, 7 * (initial >> (3 * level)));
-    //     total_bytes += ns * 7 * (initial >> (3 * level));
-    //     break;
-    // }
-  }
-  double kb = total_bytes/1024.0; 
-  double mb = kb / 1024.0;
-  printf("Sizeof initial: %.2f KB = %.2f MB = %.2f GB\n", kb, mb, mb / 1024);
-#endif
-  
+  //SeqWriteGet();
   IgorMultiThreaded();
+  char command[1000];
+  strcpy(command, "rm -rf ");
+  strcat(command, kDBPath.c_str());
+  printf("command: %s\n", command);
+  system(command);
   return 0;
 }
